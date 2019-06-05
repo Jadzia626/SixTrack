@@ -474,7 +474,7 @@ subroutine thck4d(nthinerr)
   use mod_particles
   use bdex, only : bdex_enable
   use dynk, only : dynk_enabled, dynk_apply
-  use dump, only : dump_linesFirst, dump_lines, ldumpfront
+  use dump, only : dump_linesFirst, dump_lines, dump_atFront
   use collimation, only: do_coll, part_abs_turn
   use aperture
 
@@ -601,7 +601,7 @@ subroutine thck4d(nthinerr)
       else
         ix=ic(i)-nblo
 
-        if(ldumpfront) then
+        if(dump_atFront) then
           write(lout,"(a)") "TRACKING> DUMP/FRONT not yet supported on thick elements "//&
             "due to lack of test cases. Please contact developers!"
           call prror
@@ -1087,7 +1087,7 @@ subroutine thck4d(nthinerr)
 
 475   continue
 
-      if (.not. ldumpfront) then
+      if (.not. dump_atFront) then
         call dump_lines(n,i,ix)
       endif
 
@@ -1129,7 +1129,7 @@ subroutine thck6d(nthinerr)
   use mod_particles
   use bdex, only : bdex_enable
   use dynk, only : dynk_enabled, dynk_apply
-  use dump, only : dump_linesFirst, dump_lines, ldumpfront
+  use dump, only : dump_linesFirst, dump_lines, dump_atFront
   use collimation, only: do_coll, part_abs_turn
   use aperture
 
@@ -1265,7 +1265,7 @@ subroutine thck6d(nthinerr)
         ix=ic(i)-nblo
       end if
 
-      if (ldumpfront) then
+      if (dump_atFront) then
         write(lerr,"(a)") "DUMP> ERROR FRONT not yet supported on thick elements due to lack of test cases. "//&
           "Please contact developers!"
         call prror
@@ -1788,7 +1788,7 @@ subroutine thck6d(nthinerr)
 
 495   continue
 
-      if (.not. ldumpfront) then
+      if (.not. dump_atFront) then
         call dump_lines(n,i,ix)
       end if
 

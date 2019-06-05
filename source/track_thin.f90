@@ -494,7 +494,7 @@ subroutine thin4d(nthinerr)
   use mathlib_bouncer
   use mod_particles
   use dynk, only : dynk_enabled, dynk_apply
-  use dump, only : dump_linesFirst, dump_lines, ldumpfront
+  use dump, only : dump_linesFirst, dump_lines, dump_atFront
   use collimation, only: do_coll, part_abs_turn
   use aperture
 
@@ -617,7 +617,7 @@ subroutine thin4d(nthinerr)
       ix=ic(i)-nblo ! ix = index of single element
 !Should this be inside "if ktrack .ne. 1"? (time)
 
-      if (ldumpfront) then
+      if (dump_atFront) then
         call dump_lines(n,i,ix)
       end if
 
@@ -1061,7 +1061,7 @@ subroutine thin4d(nthinerr)
 #include "include/lostpart.f90"
 
 625 continue
-    if (.not. ldumpfront) then
+    if (.not. dump_atFront) then
       call dump_lines(n,i,ix)
     end if
 
@@ -1109,7 +1109,7 @@ subroutine thin6d(nthinerr)
   use bdex,       only : bdex_track, bdex_enable, bdex_elementAction
   use scatter,    only : scatter_thin, scatter_debug
   use dynk,       only : dynk_enabled, dynk_apply
-  use dump,       only : dump_linesFirst, dump_lines, ldumpfront
+  use dump,       only : dump_linesFirst, dump_lines, dump_atFront
   use mod_ffield, only : ffindex,ffield_genAntiQuad,ffield_enterQuad,ffield_exitQuad,ffield_enabled
   use aperture
   use mod_settings
@@ -1259,7 +1259,7 @@ subroutine thin6d(nthinerr)
       end if
 #endif
 
-      if (ldumpfront) then
+      if (dump_atFront) then
         call dump_lines(n,i,ix)
       end if
 
@@ -2022,7 +2022,7 @@ subroutine thin6d(nthinerr)
 
 645   continue
 
-      if (.not. ldumpfront) then
+      if (.not. dump_atFront) then
         call dump_lines(n,i,ix)
       end if
 

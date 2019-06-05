@@ -25,34 +25,23 @@ module dump
 
   implicit none
 
-  ! High precision printout required at all flagged SINGLE ELEMENTs
-  logical, save :: ldumphighprec = .false.
-  ! Dump at the beginning of each element, not at the end.
-  logical, save :: ldumpfront    = .false.
-  ! flag the SINGLE ELEMENT for dumping
-  logical, allocatable, save :: ldump(:)  !(-1:nele)
+  logical, private, save :: dump_highPrec = .false. ! High precision printout required at all flagged SINGLE ELEMENTs
+  logical, public,  save :: dump_atFront  = .false. ! Dump at the beginning of each element, not at the end.
 
-  ! Dump every n turns at a flagged SINGLE ELEMENT (dump frequency)
-  integer, allocatable, save :: ndumpt(:) !(-1:nele)
-  ! First turn for DUMP to be active
-  integer, allocatable, save :: dumpfirst(:) !(-1:nele)
-  ! Last turn for this DUMP to be active (-1=all)
-  integer, allocatable, save :: dumplast(:) !(-1:nele)
-  ! Fortran unit for dump at a flagged SINGLE ELEMENT
-  integer, allocatable, save :: dumpunit(:) !(-1:nele)
-  ! Flag the format of the dump
-  integer, allocatable, save :: dumpfmt(:) !(-1:nele)
-  ! Filename to write the dump to
-  character(len=:), allocatable, save :: dump_fname(:) !(mFileName)(-1:nele)
+  ! Single element arrays (-1:nele)
+  logical,          allocatable, public,  save :: ldump(:)      ! flag the SINGLE ELEMENT for dumping
+  integer,          allocatable, private, save :: ndumpt(:)     ! Dump every n turns at a flagged SINGLE ELEMENT (dump frequency)
+  integer,          allocatable, public,  save :: dumpfirst(:)  ! First turn for DUMP to be active
+  integer,          allocatable, public,  save :: dumplast(:)   ! Last turn for this DUMP to be active (-1=all)
+  integer,          allocatable, public,  save :: dumpunit(:)   ! Fortran unit for dump at a flagged SINGLE ELEMENT
+  integer,          allocatable, public,  save :: dumpfmt(:)    ! Flag the format of the dump
+  character(len=:), allocatable, public,  save :: dump_fname(:) ! Filename to write the dump to
 
-  ! tas matrix used for nomalisation of phase space in DUMP and FMA.
+  ! tas matrix used for nomalisation of phase space in DUMP and FMA. (-1:nblz,6,6)
   ! First index = -1 -> StartDUMP, filled differently than idx > 0; First index = 0  -> Unused.
-  real(kind=fPrec), allocatable, save :: dumptas(:,:,:)    ! (-1:nblz,6,6)
-  ! inverse matrix of dumptas
-  real(kind=fPrec), allocatable, save :: dumptasinv(:,:,:) ! (-1:nblz,6,6)
-  ! closed orbit used for normalisation of phase space
-  ! TODO: check units used in dumpclo; is x' or px used?
-  real(kind=fPrec), allocatable, save :: dumpclo(:,:)      ! (-1:nblz,6)
+  real(kind=fPrec), allocatable, public,  save :: dumptas(:,:,:)    ! tas matrix
+  real(kind=fPrec), allocatable, public,  save :: dumptasinv(:,:,:) ! inverse matrix of dumptas
+  real(kind=fPrec), allocatable, public,  save :: dumpclo(:,:)      ! closed orbit used for normalisation of phase space
 
 #ifdef HDF5
   ! Array to save hdf5 formats for each dump format
@@ -62,7 +51,7 @@ module dump
 
 #ifdef CR
   ! For resetting file positions
-  integer, allocatable, save :: dumpfilepos(:), dumpfilepos_cr(:) !(-1:nele)
+  integer, allocatable, save :: dumpfilepos(:), dumpfilepos_cr(:)
 #endif
 
 contains
@@ -113,7 +102,7 @@ subroutine dump_lines(n,i,ix)
     ! Dump at all SINGLE ELEMENTs
     if (ndumpt(0) == 1 .or. mod(n,ndumpt(0)) == 1) then
       if ((n >= dumpfirst(0)) .and. ((n <= dumplast(0)) .or. (dumplast(0) == -1))) then
-        call dump_beam_population(n, i, ix, dumpunit(0), dumpfmt(0), ldumphighprec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
+        call dump_beam_population(n, i, ix, dumpunit(0), dumpfmt(0), dump_highPrec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
       end if
     end if
   end if
@@ -123,7 +112,7 @@ subroutine dump_lines(n,i,ix)
       ! Dump at this precise SINGLE ELEMENT
       if (ndumpt(ix) == 1 .or. mod(n,ndumpt(ix)) == 1) then
         if ((n >= dumpfirst(ix)) .and. ((n <= dumplast(ix)) .or. (dumplast(ix) == -1))) then
-          call dump_beam_population(n, i, ix, dumpunit(ix), dumpfmt(ix), ldumphighprec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
+          call dump_beam_population(n, i, ix, dumpunit(ix), dumpfmt(ix), dump_highPrec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
         end if
       end if
     end if
@@ -141,7 +130,7 @@ subroutine dump_linesFirst(n)
   if (ldump(-1)) then
     if (ndumpt(-1) == 1 .or. mod(n,ndumpt(-1)) == 1) then
       if ((n >= dumpfirst(-1)) .and. ((n <= dumplast(-1)) .or. (dumplast(-1) == -1))) then
-        call dump_beam_population(n, 0, 0, dumpunit(-1), dumpfmt(-1), ldumphighprec, dumpclo(-1,1:6),dumptasinv(-1,1:6,1:6))
+        call dump_beam_population(n, 0, 0, dumpunit(-1), dumpfmt(-1), dump_highPrec, dumpclo(-1,1:6),dumptasinv(-1,1:6,1:6))
       end if
     end if
   end if
@@ -189,10 +178,10 @@ subroutine dump_parseInputLine(inLine,iErr)
   if(nSplit == 0) return
 
   if(lnSplit(1) == "HIGH") then
-    ldumphighprec = .true.
+    dump_highPrec = .true.
     return
   else if(lnSplit(1) == "FRONT") then
-    ldumpfront = .true.
+    dump_atFront = .true.
     return
   end if
 
@@ -369,10 +358,10 @@ subroutine dump_parseInputDone(iErr)
     end if
   end do
 
-  if (ldumphighprec) then
+  if (dump_highPrec) then
     write(lout,"(a)") "DUMP> Requested high precision dumping"
   end if
-  if (ldumpfront) then
+  if (dump_atFront) then
     write(lout,"(a)") "DUMP> Requested FRONT dumping"
   end if
   return
@@ -503,15 +492,15 @@ subroutine dump_initialise
         if (i == -1) then  ! STARTdump
           write(dumpunit(i),'(a,i0,a,a16,4(a,i12),2(a,L1))') &
             '# DUMP format #',dumpfmt(i),', START=',bez(1), ', number of particles=',napx, ', dump period=',ndumpt(i), &
-            ', first turn=', dumpfirst(i), ', last turn=',dumplast(i), ', HIGH=',ldumphighprec, ', FRONT=',ldumpfront
+            ', first turn=', dumpfirst(i), ', last turn=',dumplast(i), ', HIGH=',dump_highPrec, ', FRONT=',dump_atFront
         else if (i == 0) then ! ALL
           write(dumpunit(i),'(a,i0,a,4(a,i12),2(a,L1))') &
             '# DUMP format #',dumpfmt(i),', ALL ELEMENTS,', ' number of particles=',napx, ', dump period=',ndumpt(i), &
-            ', first turn=', dumpfirst(i), ', last turn=',dumplast(i), ', HIGH=',ldumphighprec, ', FRONT=',ldumpfront
+            ', first turn=', dumpfirst(i), ', last turn=',dumplast(i), ', HIGH=',dump_highPrec, ', FRONT=',dump_atFront
         else ! Normal element
           write(dumpunit(i),'(a,i0,a,a16,4(a,i12),2(a,L1))') &
             '# DUMP format #',dumpfmt(i), ', bez=', bez(i), ', number of particles=',napx,', dump period=',ndumpt(i), &
-            ', first turn=',dumpfirst(i), ', last turn=',dumplast(i), ', HIGH=',ldumphighprec, ', FRONT=',ldumpfront
+            ', first turn=',dumpfirst(i), ', last turn=',dumplast(i), ', HIGH=',dump_highPrec, ', FRONT=',dump_atFront
         end if
 
         ! Write the format-specific headers:
