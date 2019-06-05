@@ -656,7 +656,7 @@ subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound)
   use mod_common, only : iu, tlen, ic, dcum
   use numerical_constants, only : zero
 
-  real(kind=fPrec), intent(out) :: sLoc
+  real(kind=fPrec), intent(in)  :: sLoc
   logical,          intent(in)  :: isLast
   integer,          intent(out) :: iEl
   integer,          intent(out) :: ixEl
@@ -667,7 +667,6 @@ subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound)
 
   iEl  = -1
   ixEl = -1
-  sLoc = zero
 
   if(sLoc > tlen .or. sLoc < zero) then
     write(lerr,"(a,2(f11.4,a))") "GEOMETRY> ERROR Find Element: "//&
