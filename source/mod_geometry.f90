@@ -491,7 +491,7 @@ integer function geom_getSingElemID(elemName)
   use mod_common
 
   character(len=*), intent(in) :: elemName
-  integer i, elemID
+  integer i
 
   geom_getSingElemID = -1
   do i=1,il
@@ -517,7 +517,7 @@ integer function geom_getStruElemID(elemName, iStart, iEnd)
   integer,          intent(in) :: iStart
   integer,          intent(in) :: iEnd
 
-  integer i, elemID
+  integer i
 
   geom_getStruElemID = -1
 
@@ -532,6 +532,55 @@ integer function geom_getStruElemID(elemName, iStart, iEnd)
   end do
 
 end function geom_getStruElemID
+
+! ================================================================================================ !
+!  V.K. Berglyd Olsen, BE-ABP-HSS
+!  Returns the structure element index of a given element position. Is -1 if not found.
+!  Created: 2019-06-05
+!  Updated: 2019-06-05
+! ================================================================================================ !
+integer function geom_getStruElemFromPos(sPos, selectMethod)
+
+  use mod_common, only : dcum, iu
+
+  real(kind=fPrec), intent(in) :: sPos
+  integer,          intent(in) :: selectMethod
+
+  integer i, iA, iB, iC, iD, iN
+
+  geom_getStruElemFromPos = -1
+
+  iA = 0
+  iB = iu+1
+  iC = 0
+  iD = 0
+  iN = 2*nint(log(real(iu))) + 5 ! Give some extra room, but 2*log(n) should be enough
+
+  ! Binary search
+  do i=1,iN
+    iD = iB - iA
+    if(iD == 1) exit
+    iC = iA + iD/2
+    if(sPos > dcum(iC)) then
+      iA = iC
+    else
+      iB = iC
+    end if
+  end do
+
+  if(selectMethod == -1) then    ! Return lowest index
+    geom_getStruElemFromPos = iA
+  elseif(selectMethod == 1) then ! Return highest index
+    geom_getStruElemFromPos = iB
+  elseif(selectMethod == 0) then ! Return nearest index
+    if(sPos - dcum(iA) < dcum(iB) - sPos) then
+      geom_getStruElemFromPos = iA
+    else
+      geom_getStruElemFromPos = iB
+    end if
+  end if
+
+end function geom_getStruElemFromPos
 
 ! ================================================================================================ !
 !  A.Mereghetti, V.K. Berglyd Olsen, BE-ABP-HSS
@@ -650,8 +699,10 @@ end function geom_checkSingElemUnique
 !  iEl      : Index in lattice structure of found element
 !  ixEl     : Index in array of SINGLE ELEMENTs of found element
 !  wasFound : True if element was found
+!
+!  Note: This routine does not currently work. Don't use.
 ! ================================================================================================ !
-subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound, iStart, iEnd)
+subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound)
 
   use parpro
   use crcoall
@@ -659,17 +710,18 @@ subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound, iStart, iEnd)
   use mod_common, only : iu, tlen, ic, dcum
   use numerical_constants, only : zero
 
-  real(kind=fPrec), intent(in)  :: sLoc
-  logical,          intent(in)  :: isLast
-  integer,          intent(out) :: iEl
-  integer,          intent(out) :: ixEl
-  logical,          intent(out) :: wasFound
+  real(kind=fPrec), intent(inout) :: sLoc
+  logical,          intent(in)    :: isLast
+  integer,          intent(out)   :: iEl
+  integer,          intent(out)   :: ixEl
+  logical,          intent(out)   :: wasFound
 
   integer i, iDelta, iCheck, iMax, iStep
   logical lSlide
 
   iEl  = -1
   ixEl = -1
+  sLoc = zero
 
   if(sLoc > tlen .or. sLoc < zero) then
     write(lerr,"(a,2(f11.4,a))") "GEOMETRY> ERROR Find Element: "//&
@@ -681,7 +733,7 @@ subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound, iStart, iEnd)
   iCheck = iu
   iDelta = iu
   do while(iDelta > 1 .or. iCheck > 0 .or. iCheck < iu)
-    if(dcum(iCheck) == sLoc) exit
+    if(dcum(iCheck) == sLoc) exit ! This may never be reached
     iDelta = nint(real(iDelta/2))
     if(dcum(iCheck) < sLoc) then
       iCheck = iCheck + iDelta
