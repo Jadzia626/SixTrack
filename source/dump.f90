@@ -247,11 +247,7 @@ subroutine dump_parseInputLine(inLine,iErr)
       elemOne = trim(lnSplit(4))
       isSingElem = .true.
     case("STRU")
-      if(strumcol .eqv. .false.) then
-        write(lerr,"(a,i0)") "DUMP> ERROR Direct selection of structure element can only be used with multicolumn STRUCTURE input"
-        iErr = .true.
-        return
-      end if
+      if(strumcol .eqv. .false.) goto 100
       elemOne = trim(lnSplit(4))
       isSingElem = .false.
     case("RANG")
@@ -264,11 +260,13 @@ subroutine dump_parseInputLine(inLine,iErr)
       if(chr_isNumeric(lnSplit(4))) then
         call chr_cast(lnSplit(4), sOne, iErr)
       else
+        if(strumcol .eqv. .false.) goto 100
         elemOne = trim(lnSplit(4))
       end if
       if(chr_isNumeric(lnSplit(5))) then
         call chr_cast(lnSplit(5), sTwo, iErr)
       else
+        if(strumcol .eqv. .false.) goto 100
         elemTwo = trim(lnSplit(5))
       end if
       isSingElem = .false.
@@ -425,13 +423,17 @@ subroutine dump_parseInputLine(inLine,iErr)
 
   return
 
+100 continue
+  write(lerr,"(a,i0)") "DUMP> ERROR Selection of structure element by name can only be used with multicolumn STRUCTURE input"
+  iErr = .true.
+  return
+
 end subroutine dump_parseInputLine
 
 subroutine dump_setupJobs
 
   use parpro
   use crcoall
-  use mod_units
   use mod_common
   use mod_geometry
 
@@ -515,27 +517,18 @@ subroutine dump_setupJobs
 
     end if
 
-  ! if(struTwo == -1) struTwo = struOne
-  ! if(struOne > struTwo) then
-  !   write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE, "//&
-  !     "got ",struOne," and ",struTwo
-  !   iErr = .true.
-  !   return
-  ! end if
+    if(struTwo == -1) struTwo = struOne
+    if(struOne > struTwo) then
+      write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE, "//&
+        "got ",struOne," and ",struTwo
+      call prror
+    end if
 
     dump_jobList(jobNo)%singID  = singID
     dump_jobList(jobNo)%struOne = struOne
     dump_jobList(jobNo)%struTwo = struTwo
 
   end do
-
-
-
-
-  call f_requestUnit("dump_jobs.log",fUnit)
-  call f_open(file="dump_jobs.log", unit=fUnit, formatted=.true., mode="w", status="replace")
-  call dump_jobReport(fUnit)
-  call f_freeUnit(fUnit)
 
 end subroutine dump_setupJobs
 
