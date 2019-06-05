@@ -22,6 +22,7 @@
 module dump
 
   use floatPrecision
+  use parpro, only : mFileName
 
   implicit none
 
@@ -42,6 +43,32 @@ module dump
   real(kind=fPrec), allocatable, public,  save :: dumptas(:,:,:)    ! tas matrix
   real(kind=fPrec), allocatable, public,  save :: dumptasinv(:,:,:) ! inverse matrix of dumptas
   real(kind=fPrec), allocatable, public,  save :: dumpclo(:,:)      ! closed orbit used for normalisation of phase space
+
+  type, private :: dump_fileType
+    character(len=mFileName), private :: file        = " "
+    integer,                  private :: format      = 0
+    real(kind=fPrec),         private :: tas(6,6)    = 0.0
+    real(kind=fPrec),         private :: invtas(6,6) = 0.0
+    logical,                  private :: highprec    = .false.
+    logical,                  private :: front       = .false.
+  end type dump_fileType
+
+  type, private :: dump_jobType
+    integer,                  private :: fileID    = -1
+    integer,                  private :: firstTurn =  1
+    integer,                  private :: lastTurn  = -1
+    integer,                  private :: interval  =  1
+    integer,                  private :: struOne   = -1
+    integer,                  private :: struTwo   = -1
+    integer,                  private :: singID    = -1
+  end type dump_jobType
+
+  type(dump_fileType), allocatable, public, save :: dump_fileList(:)
+  type(dump_jobType),  allocatable, public, save :: dump_jobList(:)
+  integer,             allocatable, public, save :: dump_struMap(:)
+
+  integer, public, save :: dump_nFiles = 0
+  integer, public, save :: dump_nJobs  = 0
 
 #ifdef HDF5
   ! Array to save hdf5 formats for each dump format
@@ -90,54 +117,10 @@ subroutine dump_expand_arrays(nele_new, nblz_new)
 
 end subroutine dump_expand_arrays
 
-subroutine dump_lines(n,i,ix)
-
-  use mod_common_track
-
-  implicit none
-
-  integer, intent(in) :: n,i,ix
-
-  if (ldump(0)) then
-    ! Dump at all SINGLE ELEMENTs
-    if (ndumpt(0) == 1 .or. mod(n,ndumpt(0)) == 1) then
-      if ((n >= dumpfirst(0)) .and. ((n <= dumplast(0)) .or. (dumplast(0) == -1))) then
-        call dump_beam_population(n, i, ix, dumpunit(0), dumpfmt(0), dump_highPrec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
-      end if
-    end if
-  end if
-  if(ktrack(i) /= 1) then
-    ! The next "if" is only safe for SINGLE ELEMENTS, not BLOC where ix<0.
-    if (ldump(ix)) then
-      ! Dump at this precise SINGLE ELEMENT
-      if (ndumpt(ix) == 1 .or. mod(n,ndumpt(ix)) == 1) then
-        if ((n >= dumpfirst(ix)) .and. ((n <= dumplast(ix)) .or. (dumplast(ix) == -1))) then
-          call dump_beam_population(n, i, ix, dumpunit(ix), dumpfmt(ix), dump_highPrec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
-        end if
-      end if
-    end if
-  end if
-
-end subroutine dump_lines
-
-! ================================================================================================================================ !
-subroutine dump_linesFirst(n)
-
-  implicit none
-  integer, intent(in) :: n
-
-  ! StartDUMP - dump on the first element
-  if (ldump(-1)) then
-    if (ndumpt(-1) == 1 .or. mod(n,ndumpt(-1)) == 1) then
-      if ((n >= dumpfirst(-1)) .and. ((n <= dumplast(-1)) .or. (dumplast(-1) == -1))) then
-        call dump_beam_population(n, 0, 0, dumpunit(-1), dumpfmt(-1), dump_highPrec, dumpclo(-1,1:6),dumptasinv(-1,1:6,1:6))
-      end if
-    end if
-  end if
-
-end subroutine dump_linesFirst
-
-! ================================================================================================================================ !
+! ================================================================================================ !
+!  Parse input lines into a set of structs
+!  Rewritten from scratch by V.K. Berglyd Olsen, BE-ABP-HSS
+! ================================================================================================ !
 subroutine dump_parseInputLine(inLine,iErr)
 
   use crcoall
@@ -148,17 +131,154 @@ subroutine dump_parseInputLine(inLine,iErr)
   use hdf5_output
 #endif
 
-  implicit none
-
   character(len=*), intent(in)    :: inLine
   logical,          intent(inout) :: iErr
 
   character(len=:), allocatable   :: lnSplit(:)
-  character(len=mNameLen) elemName
+  character(len=mNameLen) elemName, elemOne, elemTwo
   character(len=mFileName) fileName
+  real(kind=fPrec) sOne, sTwo
+  integer nSplit, dFmt, i, nSkip, tOne, tTwo, tStep
+  logical spErr, isHighPrec, isFront, isSingElem, isRange
+
   integer i1,i2,i3,i4,i5,kk,j
-  integer nSplit
-  logical spErr
+
+  call chr_split(inLine, lnSplit, nSplit, spErr)
+  if(spErr) then
+    write(lerr,"(a)") "DUMP> ERROR Failed to parse input line."
+    iErr = .true.
+    return
+  end if
+  if(nSplit == 0) return
+
+  select case(lnSplit(1))
+
+  case("FILE")
+    if(nSplit < 3 .or. nSplit > 5) then
+      write(lerr,"(a,i0)") "DUMP> ERROR FILE takes 3 to 5 arguments, got ",nSplit-1
+      write(lerr,"(a)")    "DUMP>       FILE filename format [HIGHPREC FRONT]"
+      iErr = .true.
+      return
+    end if
+
+    if(len_trim(lnSplit(2)) > mFileName) then
+      write(lerr,"(2(a,i0))") "DUMP> ERROR Filename can be up to ",mFileName," characters, got ",len_trim(lnSplit(2))
+      iErr = .true.
+      return
+    end if
+    fileName = trim(lnSplit(2))
+
+    select case(lnSplit(3))
+    case("BEAM0","0")
+      dFmt = 0
+    case("BEAM1","1")
+      dFmt = 1
+    case("BEAM2","2")
+      dFmt = 2
+    case("BEAM3","3")
+      dFmt = 3
+    case("BEAM4","4")
+      dFmt = 4
+    case("BEAM5","5")
+      dFmt = 5
+    case("BEAM6","6")
+      dFmt = 6
+    case("BEAM7","7")
+      dFmt = 7
+    case("BEAM8","8")
+      dFmt = 8
+    case("BEAM9","9")
+      dFmt = 9
+    case default
+      write(lerr,"(a)") "DUMP> ERROR Unknown format '"//trim(lnSplit(3))//"'"
+      iErr = .true.
+      return
+    end select
+
+    isHighPrec = .false.
+    isFront    = .false.
+
+    do i=4,nSplit
+      select case(lnSplit(i))
+      case("HIGHPREC")
+        isHighPrec = .true.
+      case("FRONT")
+        isFront = .true.
+      case default
+        write(lerr,"(a)") "DUMP> ERROR Unknown argument '"//trim(lnSplit(i))//"'"
+        iErr = .true.
+        return
+      end select
+    end do
+
+    call dump_saveFileEntry(fileName, dFmt, isHighPrec, isFront, iErr)
+    if(iErr) return
+
+  case("DUMP")
+    if(nSplit < 4) then
+      write(lerr,"(a,i0)") "DUMP> ERROR DUMP takes at least 4 arguments, got ",nSplit-1
+      write(lerr,"(a)")    "DUMP>       DUMP filename TYPE element/range [firstTurn lastTurn interval]"
+      iErr = .true.
+      return
+    end if
+
+    if(len_trim(lnSplit(2)) > mFileName) then
+      write(lerr,"(2(a,i0))") "DUMP> ERROR Filename can be up to ",mFileName," characters, got ",len_trim(lnSplit(2))
+      iErr = .true.
+      return
+    end if
+    fileName = trim(lnSplit(2))
+
+    elemOne    = " "
+    elemTwo    = " "
+    sOne       = 0.0
+    sTwo       = 0.0
+    isSingElem = .false.
+    isRange    = .false.
+    nSkip      = 4
+    select case(lnSplit(3)(1:4))
+    case("SING")
+      elemOne = trim(lnSplit(4))
+      isSingElem = .true.
+    case("STRU")
+      elemOne = trim(lnSplit(4))
+      isSingElem = .false.
+    case("RANG")
+      if(nSplit < 5) then
+        write(lerr,"(a,i0)") "DUMP> ERROR DUMP RANGE takes at least 5 arguments, got ",nSplit-1
+        write(lerr,"(a)")    "DUMP>       DUMP filename RANGE from_elem/pos to_elem/pos [firstTurn lastTurn interval]"
+        iErr = .true.
+        return
+      end if
+      if(chr_isNumeric(lnSplit(4))) then
+        call chr_cast(lnSplit(4), sOne, iErr)
+      else
+        elemOne = trim(lnSplit(4))
+      end if
+      if(chr_isNumeric(lnSplit(5))) then
+        call chr_cast(lnSplit(5), sTwo, iErr)
+      else
+        elemTwo = trim(lnSplit(5))
+      end if
+      isSingElem = .false.
+      isRange    = .true.
+      nSkip      = 5
+    end select
+
+    tOne  =  1
+    tTwo  = -1
+    tStep =  1
+
+    if(nSplit > nSkip)   call chr_cast(lnSplit(nSkip+1), tOne,  iErr)
+    if(nSplit > nSkip+1) call chr_cast(lnSplit(nSkip+2), tTwo,  iErr)
+    if(nSplit > nSkip+2) call chr_cast(lnSplit(nSkip+3), tStep, iErr)
+
+    call dump_saveJobEntry(fileName, elemOne, elemTwo, sOne, sTwo, isSingElem, isRange, tOne, tTwo, tStep, iErr)
+    if(iErr) return
+
+  end select
+
+
 
   ! initialise reading variables, to avoid storing nonsense values
   elemName = " " ! Element Name
@@ -168,14 +288,6 @@ subroutine dump_parseInputLine(inLine,iErr)
   i3       = 0   ! format
   i4       = 1   ! first turn
   i5       = -1  ! last turn
-
-  call chr_split(inLine, lnSplit, nSplit, spErr)
-  if(spErr) then
-    write(lerr,"(a)") "DUMP> ERROR Failed to parse input line."
-    iErr = .true.
-    return
-  end if
-  if(nSplit == 0) return
 
   if(lnSplit(1) == "HIGH") then
     dump_highPrec = .true.
@@ -302,6 +414,249 @@ subroutine dump_parseInputLine(inLine,iErr)
   return
 
 end subroutine dump_parseInputLine
+
+subroutine dump_saveFileEntry(fileName, fileFmt, isHighPrec, isFront, iErr)
+
+  character(len=*), intent(in)    :: fileName
+  integer,          intent(in)    :: fileFmt
+  logical,          intent(in)    :: isFront
+  logical,          intent(in)    :: isHighPrec
+  logical,          intent(inout) :: iErr
+
+  type(dump_fileType), allocatable :: tmpFileList(:)
+
+  ! Make room for the file entry
+  if(allocated(dump_fileList) .eqv. .false.) then
+    allocate(dump_fileList(1))
+    dump_nFiles = 1
+  else
+    allocate(tmpFileList(dump_nFiles + 1))
+    tmpFileList(1:dump_nFiles) = dump_fileList(1:dump_nFiles)
+    dump_nFiles = dump_nFiles + 1
+    call move_alloc(tmpFileList, dump_fileList)
+  end if
+
+  ! Save it
+  dump_fileList(dump_nFiles)%file        = fileName
+  dump_fileList(dump_nFiles)%format      = fileFmt
+  dump_fileList(dump_nFiles)%tas(6,6)    = 0.0
+  dump_fileList(dump_nFiles)%invtas(6,6) = 0.0
+  dump_fileList(dump_nFiles)%highprec    = isHighPrec
+  dump_fileList(dump_nFiles)%front       = isFront
+
+end subroutine dump_saveFileEntry
+
+subroutine dump_saveJobEntry(fileName, elemOne, elemTwo, sOne, sTwo, isSingElem, isRange, tOne, tTwo, tStep, iErr)
+
+  use crcoall
+  use mod_common
+  use mod_geometry
+
+  character(len=*), intent(in)    :: fileName
+  character(len=*), intent(in)    :: elemOne
+  character(len=*), intent(in)    :: elemTwo
+  real(kind=fPrec), intent(in)    :: sOne
+  real(kind=fPrec), intent(in)    :: sTwo
+  logical,          intent(in)    :: isSingElem
+  logical,          intent(in)    :: isRange
+  integer,          intent(inout) :: tOne
+  integer,          intent(inout) :: tTwo
+  integer,          intent(inout) :: tStep
+  logical,          intent(inout) :: iErr
+
+  type(dump_jobType), allocatable :: tmpJobList(:)
+  integer i, j, fileID, singID, struOne, struTwo
+  logical wasFound
+
+  ! Make room for the job entry
+  if(allocated(dump_jobList) .eqv. .false.) then
+    allocate(dump_jobList(1))
+    dump_nJobs = 1
+  else
+    allocate(tmpJobList(dump_nJobs + 1))
+    tmpJobList(1:dump_nJobs) = dump_jobList(1:dump_nJobs)
+    dump_nJobs = dump_nJobs + 1
+    call move_alloc(tmpJobList, dump_jobList)
+  end if
+
+  ! Find the file
+  if(allocated(dump_fileList) .eqv. .false.) then
+    write(lerr,"(a)") "DUMP> ERROR No filenames declared before DUMP declaration."
+    iErr = .true.
+    return
+  end if
+
+  fileID = -1
+  do i=1,dump_nFiles
+    if(dump_fileList(i)%file == fileName) then
+      fileID = i
+      exit
+    end if
+  end do
+  if(fileID == -1) then
+    write(lerr,"(a)") "DUMP> ERROR Filename not declared before DUMP declaration."
+    iErr = .true.
+    return
+  end if
+
+  ! Look up the element IDs
+  singID  = -1
+  struOne = -1
+  struTwo = -1
+
+  if(isSingElem) then
+
+    ! We have a single element to look up
+    if(elemOne == "ALL") then
+      ! DUMP ALL is handle by the structure element logic
+      struOne = 1
+      struTwo = iu
+    else if(elemOne == "StartDUMP") then
+      ! StartDUMP is handle by the structure element logic
+      struOne = 0
+    else
+      singID = geom_getSingElemID(elemOne)
+      if(singID == -1) then
+        write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the single element list."
+        iErr = .true.
+        return
+      end if
+    end if
+
+  else
+
+    if(elemOne == "ALL") then
+      struOne = 1
+      struTwo = iu
+    else if(elemOne == "StartDUMP") then
+      struOne = 0
+    else
+      if(elemOne == " ") then
+        ! We should have an s coordinate instead
+        call geom_findElemAtLoc(sOne, .true., struOne, j, wasFound)
+        if(wasFound .eqv. .false.) then
+          ! Error message written by the search routine
+          iErr = .true.
+          return
+        end if
+      else
+        struOne = geom_getStruElemID(elemOne)
+        if(struOne == -1) then
+          write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the structure element list."
+          iErr = .true.
+          return
+        end if
+      end if
+
+      if(isRange) then
+        ! If we're looking for a range, look up the second element too
+        if(elemTwo == " ") then
+          ! We should have an s coordinate instead
+          call geom_findElemAtLoc(sTwo, .true., struTwo, j, wasFound)
+          if(wasFound .eqv. .false.) then
+            ! Error message written by the search routine
+            iErr = .true.
+            return
+          end if
+        else
+          struTwo = geom_getStruElemID(elemTwo)
+          if(struTwo == -1) then
+            write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemTwo)//"' not found in the structure element list."
+            iErr = .true.
+            return
+          end if
+        end if
+      end if
+    end if
+
+  end if
+
+  ! Do some sanity checks
+  if(tTwo == -1) tTwo = numl
+  if(tOne < 1) then
+    write(lerr,"(a,i0)") "DUMP> ERROR First turn must be larger than 0, got ",tOne
+    iErr = .true.
+    return
+  end if
+  if(tOne > tTwo) then
+    write(lerr,"(a,i0)") "DUMP> ERROR First turn must be smaller than last turn, unless last turn is -1, got ",tOne
+    iErr = .true.
+    return
+  end if
+  if(tTwo > numl) then
+    write(lerr,"(a,i0)") "DUMP> ERROR Last turn must be smaller or equal to number of turns, or -1, got ",tTwo
+    iErr = .true.
+    return
+  end if
+  if(tStep < 1 .or. tStep > numl) then
+    write(lerr,"(2(a,i0))") "DUMP> ERROR Turn interval must be in the range [1:",numl,"], got ",tStep
+    iErr = .true.
+    return
+  end if
+
+  if(struTwo == -1) struTwo = struOne
+  if(struOne > struTwo) then
+    write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE"
+    iErr = .true.
+    return
+  end if
+
+  dump_jobList(dump_nJobs)%fileID    = fileID
+  dump_jobList(dump_nJobs)%firstTurn = tOne
+  dump_jobList(dump_nJobs)%lastTurn  = tTwo
+  dump_jobList(dump_nJobs)%interval  = tStep
+  dump_jobList(dump_nJobs)%struOne   = struOne
+  dump_jobList(dump_nJobs)%struTwo   = struTwo
+  dump_jobList(dump_nJobs)%singID    = singID
+
+end subroutine dump_saveJobEntry
+
+subroutine dump_lines(n,i,ix)
+
+  use mod_common_track
+
+  implicit none
+
+  integer, intent(in) :: n,i,ix
+
+  if (ldump(0)) then
+    ! Dump at all SINGLE ELEMENTs
+    if (ndumpt(0) == 1 .or. mod(n,ndumpt(0)) == 1) then
+      if ((n >= dumpfirst(0)) .and. ((n <= dumplast(0)) .or. (dumplast(0) == -1))) then
+        call dump_beam_population(n, i, ix, dumpunit(0), dumpfmt(0), dump_highPrec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
+      end if
+    end if
+  end if
+  if(ktrack(i) /= 1) then
+    ! The next "if" is only safe for SINGLE ELEMENTS, not BLOC where ix<0.
+    if (ldump(ix)) then
+      ! Dump at this precise SINGLE ELEMENT
+      if (ndumpt(ix) == 1 .or. mod(n,ndumpt(ix)) == 1) then
+        if ((n >= dumpfirst(ix)) .and. ((n <= dumplast(ix)) .or. (dumplast(ix) == -1))) then
+          call dump_beam_population(n, i, ix, dumpunit(ix), dumpfmt(ix), dump_highPrec, dumpclo(ix,1:6),dumptasinv(ix,1:6,1:6))
+        end if
+      end if
+    end if
+  end if
+
+end subroutine dump_lines
+
+! ================================================================================================================================ !
+subroutine dump_linesFirst(n)
+
+  implicit none
+  integer, intent(in) :: n
+
+  ! StartDUMP - dump on the first element
+  if (ldump(-1)) then
+    if (ndumpt(-1) == 1 .or. mod(n,ndumpt(-1)) == 1) then
+      if ((n >= dumpfirst(-1)) .and. ((n <= dumplast(-1)) .or. (dumplast(-1) == -1))) then
+        call dump_beam_population(n, 0, 0, dumpunit(-1), dumpfmt(-1), dump_highPrec, dumpclo(-1,1:6),dumptasinv(-1,1:6,1:6))
+      end if
+    end if
+  end if
+
+end subroutine dump_linesFirst
 
 ! ================================================================================================================================ !
 subroutine dump_parseInputDone(iErr)
