@@ -481,6 +481,56 @@ subroutine geom_parseInputLineSTRU_MULT(inLine, iLine, iErr)
 end subroutine geom_parseInputLineSTRU_MULT
 
 ! ================================================================================================ !
+!  V.K. Berglyd Olsen, BE-ABP-HSS
+!  Returns the single element index of a given element name. Is -1 if not found.
+!  Created: 2019-06-05
+!  Updated: 2019-06-05
+! ================================================================================================ !
+integer function geom_getSingElemID(elemName)
+
+  use mod_common
+
+  character(len=*), intent(in) :: elemName
+  integer i, elemID
+
+  geom_getSingElemID = -1
+  do i=1,il
+    if(bez(i) == elemName) then
+      geom_getSingElemID = i
+      exit
+    end if
+  end do
+
+end function geom_getSingElemID
+
+! ================================================================================================ !
+!  V.K. Berglyd Olsen, BE-ABP-HSS
+!  Returns the structure element index of a given element name. Is -1 if not found.
+!  Created: 2019-06-05
+!  Updated: 2019-06-05
+! ================================================================================================ !
+integer function geom_getStruElemID(elemName)
+
+  use mod_common
+
+  character(len=*), intent(in) :: elemName
+  integer i, elemID
+
+  geom_getStruElemID = -1
+
+  ! If we don't have a multicolumn struct block, the name is no unique
+  if(strumcol .eqv. .false.) return
+
+  do i=1,iu
+    if(bezs(i) == elemName) then
+      geom_getStruElemID = i
+      exit
+    end if
+  end do
+
+end function geom_getStruElemID
+
+! ================================================================================================ !
 !  A.Mereghetti, V.K. Berglyd Olsen, BE-ABP-HSS
 !  Insert a New Empty Element (empty) in SINGLE ELEMENTS
 !  Updated: 2019-03-28
@@ -642,7 +692,7 @@ subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound)
   if(dcum(iCheck) < sLoc .or. dcum(iCheck) == sLoc .and. isLast) then
     iMax   = iu
     iStep  = 1
-    lslide = isLast
+    lSlide = isLast
   else
     iMax   = 1
     iStep  = -1
