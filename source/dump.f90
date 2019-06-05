@@ -22,11 +22,6 @@
 module dump
 
   use floatPrecision
-  use parpro ! For nele
-  use mod_alloc
-#ifdef HDF5
-  use hdf5_output
-#endif
 
   implicit none
 
@@ -70,17 +65,14 @@ module dump
   integer, allocatable, save :: dumpfilepos(:), dumpfilepos_cr(:) !(-1:nele)
 #endif
 
-! ================================================================================================================================ !
-!  THE SUBROUTINES
-! ================================================================================================================================ !
 contains
 
-! ================================================================================================================================ !
+! ================================================================================================ !
 subroutine dump_expand_arrays(nele_new, nblz_new)
 
-  use numerical_constants, only : zero
-
-  implicit none
+  use parpro
+  use mod_alloc
+  use numerical_constants
 
   integer, intent(in) :: nele_new
   integer, intent(in) :: nblz_new
@@ -163,6 +155,9 @@ subroutine dump_parseInputLine(inLine,iErr)
   use mod_common
   use mod_units
   use string_tools
+#ifdef HDF5
+  use hdf5_output
+#endif
 
   implicit none
 
@@ -396,6 +391,9 @@ subroutine dump_initialise
   use string_tools
   use mod_common
   use mod_units
+#ifdef HDF5
+  use hdf5_output
+#endif
 
   implicit none
 
@@ -930,6 +928,9 @@ subroutine dump_beam_population(nturn, i, ix, unit, fmt, lhighprec, loc_clo, tas
   use mod_common_track
   use mod_common_main
   use mod_time
+#ifdef HDF5
+  use hdf5_output
+#endif
 
   implicit none
 
