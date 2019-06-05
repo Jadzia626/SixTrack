@@ -509,19 +509,22 @@ end function geom_getSingElemID
 !  Created: 2019-06-05
 !  Updated: 2019-06-05
 ! ================================================================================================ !
-integer function geom_getStruElemID(elemName)
+integer function geom_getStruElemID(elemName, iStart, iEnd)
 
   use mod_common
 
   character(len=*), intent(in) :: elemName
+  integer,          intent(in) :: iStart
+  integer,          intent(in) :: iEnd
+
   integer i, elemID
 
   geom_getStruElemID = -1
 
-  ! If we don't have a multicolumn struct block, the name is no unique
+  ! If we don't have a multicolumn struct block, the name is not unique
   if(strumcol .eqv. .false.) return
 
-  do i=1,iu
+  do i=iStart,iEnd
     if(bezs(i) == elemName) then
       geom_getStruElemID = i
       exit
@@ -648,7 +651,7 @@ end function geom_checkSingElemUnique
 !  ixEl     : Index in array of SINGLE ELEMENTs of found element
 !  wasFound : True if element was found
 ! ================================================================================================ !
-subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound)
+subroutine geom_findElemAtLoc(sLoc, isLast, iEl, ixEl, wasFound, iStart, iEnd)
 
   use parpro
   use crcoall

@@ -55,12 +55,18 @@ module dump
 
   type, private :: dump_jobType
     integer,                  private :: fileID    = -1
-    integer,                  private :: firstTurn =  1
-    integer,                  private :: lastTurn  = -1
-    integer,                  private :: interval  =  1
+    integer,                  private :: turnOne   =  1
+    integer,                  private :: turnTwo   = -1
+    integer,                  private :: turnStep  =  1
+    character(len=mNameLen),  private :: elemOne   = " "
+    character(len=mNameLen),  private :: elemTwo   = " "
+    real(kind=fPrec),         private :: posOne    = 0.0
+    real(kind=fPrec),         private :: posTwo    = 0.0
     integer,                  private :: struOne   = -1
     integer,                  private :: struTwo   = -1
     integer,                  private :: singID    = -1
+    logical,                  private :: isSingle  = .false.
+    logical,                  private :: isRange   = .false.
   end type dump_jobType
 
   type(dump_fileType), allocatable, public, save :: dump_fileList(:)
@@ -169,25 +175,25 @@ subroutine dump_parseInputLine(inLine,iErr)
     fileName = trim(lnSplit(2))
 
     select case(lnSplit(3))
-    case("BEAM0","0")
+    case("FMT0","0")
       dFmt = 0
-    case("BEAM1","1")
+    case("FMT1","1")
       dFmt = 1
-    case("BEAM2","2")
+    case("FMT2","2")
       dFmt = 2
-    case("BEAM3","3")
+    case("FMT3","3")
       dFmt = 3
-    case("BEAM4","4")
+    case("FMT4","4")
       dFmt = 4
-    case("BEAM5","5")
+    case("FMT5","5")
       dFmt = 5
-    case("BEAM6","6")
+    case("FMT6","6")
       dFmt = 6
-    case("BEAM7","7")
+    case("FMT7","7")
       dFmt = 7
-    case("BEAM8","8")
+    case("FMT8","8")
       dFmt = 8
-    case("BEAM9","9")
+    case("FMT9","9")
       dFmt = 9
     case default
       write(lerr,"(a)") "DUMP> ERROR Unknown format '"//trim(lnSplit(3))//"'"
@@ -212,7 +218,8 @@ subroutine dump_parseInputLine(inLine,iErr)
     end do
 
     call dump_saveFileEntry(fileName, dFmt, isHighPrec, isFront, iErr)
-    if(iErr) return
+
+    return
 
   case("DUMP")
     if(nSplit < 4) then
@@ -241,6 +248,11 @@ subroutine dump_parseInputLine(inLine,iErr)
       elemOne = trim(lnSplit(4))
       isSingElem = .true.
     case("STRU")
+      if(strumcol .eqv. .false.) then
+        write(lerr,"(a,i0)") "DUMP> ERROR Direct selection of structure element can only be used with multicolumn STRUCTURE input"
+        iErr = .true.
+        return
+      end if
       elemOne = trim(lnSplit(4))
       isSingElem = .false.
     case("RANG")
@@ -274,7 +286,8 @@ subroutine dump_parseInputLine(inLine,iErr)
     if(nSplit > nSkip+2) call chr_cast(lnSplit(nSkip+3), tStep, iErr)
 
     call dump_saveJobEntry(fileName, elemOne, elemTwo, sOne, sTwo, isSingElem, isRange, tOne, tTwo, tStep, iErr)
-    if(iErr) return
+
+    return
 
   end select
 
@@ -415,6 +428,55 @@ subroutine dump_parseInputLine(inLine,iErr)
 
 end subroutine dump_parseInputLine
 
+subroutine dump_setupJobs
+
+  use parpro
+  use crcoall
+  use mod_common
+  ! use string_tools
+
+  character(len=mFileName) fileName
+  integer i
+
+  write(lout,"(a)") str_divLine
+  write(lout,"(a)") ""
+  write(lout,"(a)") "    DUMP FILES"
+  write(lout,"(a)") "  =============="
+  write(lout,"(a)") ""
+  do i=1,dump_nFiles
+    fileName = dump_fileList(i)%file
+    fileName = trim(fileName)//" "//repeat(".",mFileName-len_trim(fileName)-1)
+    write(lout,"(a,i3,2(a,l1))") "    "//fileName//"  Format: ",dump_fileList(i)%format,", "//&
+      "HighPrec: ",dump_fileList(i)%highPrec,", Front: ",dump_fileList(i)%front
+  end do
+  write(lout,"(a)") ""
+
+  write(lout,"(a)") "    DUMP JOBS"
+  write(lout,"(a)") "  ============="
+  write(lout,"(a)") ""
+  do i=1,dump_nJobs
+    fileName = dump_fileList(dump_jobList(i)%fileID)%file
+    fileName = trim(fileName)//" "//repeat(".",mFileName-len_trim(fileName)-1)
+    write(lout,"(3(a,i0))") "    "//fileName//"  "//&
+      "Turns: ",dump_jobList(i)%firstTurn," to ",dump_jobList(i)%lastTurn,", Step ",dump_jobList(i)%interval
+    if(dump_jobList(i)%singID > 0) then
+      write(lout,"(a,i6,a)") "     * From Single Element    ",dump_jobList(i)%singID, ": "//trim(bez(dump_jobList(i)%singID))
+    end if
+    if(dump_jobList(i)%struOne > 0) then
+      write(lout,"(a,i6,a)") "     * From Structure Element ",dump_jobList(i)%struOne,": "//trim(bezs(dump_jobList(i)%struOne))
+    end if
+    if(dump_jobList(i)%struTwo > 0) then
+      write(lout,"(a,i6,a)") "     * To Structure Element   ",dump_jobList(i)%struTwo,": "//trim(bezs(dump_jobList(i)%struTwo))
+    end if
+  end do
+
+  write(lout,"(a)") ""
+  write(lout,"(a)") str_divLine
+
+  stop
+
+end subroutine dump_setupJobs
+
 subroutine dump_saveFileEntry(fileName, fileFmt, isHighPrec, isFront, iErr)
 
   character(len=*), intent(in)    :: fileName
@@ -499,115 +561,122 @@ subroutine dump_saveJobEntry(fileName, elemOne, elemTwo, sOne, sTwo, isSingElem,
     return
   end if
 
-  ! Look up the element IDs
-  singID  = -1
-  struOne = -1
-  struTwo = -1
+  ! ! Look up the element IDs
+  ! singID  = -1
+  ! struOne = -1
+  ! struTwo = -1
 
-  if(isSingElem) then
+  ! if(isSingElem) then
 
-    ! We have a single element to look up
-    if(elemOne == "ALL") then
-      ! DUMP ALL is handle by the structure element logic
-      struOne = 1
-      struTwo = iu
-    else if(elemOne == "StartDUMP") then
-      ! StartDUMP is handle by the structure element logic
-      struOne = 0
-    else
-      singID = geom_getSingElemID(elemOne)
-      if(singID == -1) then
-        write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the single element list."
-        iErr = .true.
-        return
-      end if
-    end if
+  !   ! We have a single element to look up
+  !   if(elemOne == "ALL") then
+  !     ! DUMP ALL is handle by the structure element logic
+  !     struOne = 1
+  !     struTwo = mbloz
+  !   else if(elemOne == "StartDUMP") then
+  !     ! StartDUMP is handle by the structure element logic
+  !     struOne = 0
+  !   else
+  !     singID = geom_getSingElemID(elemOne)
+  !     if(singID == -1) then
+  !       write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the single element list."
+  !       iErr = .true.
+  !       return
+  !     end if
+  !   end if
 
-  else
+  ! else
 
-    if(elemOne == "ALL") then
-      struOne = 1
-      struTwo = iu
-    else if(elemOne == "StartDUMP") then
-      struOne = 0
-    else
-      if(elemOne == " ") then
-        ! We should have an s coordinate instead
-        call geom_findElemAtLoc(sOne, .true., struOne, j, wasFound)
-        if(wasFound .eqv. .false.) then
-          ! Error message written by the search routine
-          iErr = .true.
-          return
-        end if
-      else
-        struOne = geom_getStruElemID(elemOne)
-        if(struOne == -1) then
-          write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the structure element list."
-          iErr = .true.
-          return
-        end if
-      end if
+  !   if(elemOne == "ALL") then
+  !     struOne = 1
+  !     struTwo = mbloz
+  !   else if(elemOne == "StartDUMP") then
+  !     struOne = 0
+  !   else
+  !     if(elemOne == " ") then
+  !       ! We should have an s coordinate instead
+  !       call geom_findElemAtLoc(sOne, .true., struOne, j, wasFound)
+  !       if(wasFound .eqv. .false.) then
+  !         ! Error message written by the search routine
+  !         iErr = .true.
+  !         return
+  !       end if
+  !     else
+  !       struOne = geom_getStruElemID(elemOne, 1, mbloz)
+  !       if(struOne == -1) then
+  !         write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the structure element list."
+  !         iErr = .true.
+  !         return
+  !       end if
+  !     end if
 
-      if(isRange) then
-        ! If we're looking for a range, look up the second element too
-        if(elemTwo == " ") then
-          ! We should have an s coordinate instead
-          call geom_findElemAtLoc(sTwo, .true., struTwo, j, wasFound)
-          if(wasFound .eqv. .false.) then
-            ! Error message written by the search routine
-            iErr = .true.
-            return
-          end if
-        else
-          struTwo = geom_getStruElemID(elemTwo)
-          if(struTwo == -1) then
-            write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemTwo)//"' not found in the structure element list."
-            iErr = .true.
-            return
-          end if
-        end if
-      end if
-    end if
+  !     if(isRange) then
+  !       ! If we're looking for a range, look up the second element too
+  !       if(elemTwo == " ") then
+  !         ! We should have an s coordinate instead
+  !         call geom_findElemAtLoc(sTwo, .true., struTwo, j, wasFound)
+  !         if(wasFound .eqv. .false.) then
+  !           ! Error message written by the search routine
+  !           iErr = .true.
+  !           return
+  !         end if
+  !       else
+  !         struTwo = geom_getStruElemID(elemTwo, 1, mbloz)
+  !         if(struTwo == -1) then
+  !           write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemTwo)//"' not found in the structure element list."
+  !           iErr = .true.
+  !           return
+  !         end if
+  !       end if
+  !     end if
+  !   end if
 
-  end if
+  ! end if
 
-  ! Do some sanity checks
-  if(tTwo == -1) tTwo = numl
-  if(tOne < 1) then
-    write(lerr,"(a,i0)") "DUMP> ERROR First turn must be larger than 0, got ",tOne
-    iErr = .true.
-    return
-  end if
-  if(tOne > tTwo) then
-    write(lerr,"(a,i0)") "DUMP> ERROR First turn must be smaller than last turn, unless last turn is -1, got ",tOne
-    iErr = .true.
-    return
-  end if
-  if(tTwo > numl) then
-    write(lerr,"(a,i0)") "DUMP> ERROR Last turn must be smaller or equal to number of turns, or -1, got ",tTwo
-    iErr = .true.
-    return
-  end if
-  if(tStep < 1 .or. tStep > numl) then
-    write(lerr,"(2(a,i0))") "DUMP> ERROR Turn interval must be in the range [1:",numl,"], got ",tStep
-    iErr = .true.
-    return
-  end if
+  ! ! Do some sanity checks
+  ! if(tTwo == -1) tTwo = numl
+  ! if(tOne < 1) then
+  !   write(lerr,"(a,i0)") "DUMP> ERROR First turn must be larger than 0, got ",tOne
+  !   iErr = .true.
+  !   return
+  ! end if
+  ! if(tOne > tTwo) then
+  !   write(lerr,"(a,i0)") "DUMP> ERROR First turn must be smaller than last turn, unless last turn is -1, got ",tOne
+  !   iErr = .true.
+  !   return
+  ! end if
+  ! if(tTwo > numl) then
+  !   write(lerr,"(a,i0)") "DUMP> ERROR Last turn must be smaller or equal to number of turns, or -1, got ",tTwo
+  !   iErr = .true.
+  !   return
+  ! end if
+  ! if(tStep < 1 .or. tStep > numl) then
+  !   write(lerr,"(2(a,i0))") "DUMP> ERROR Turn interval must be in the range [1:",numl,"], got ",tStep
+  !   iErr = .true.
+  !   return
+  ! end if
 
-  if(struTwo == -1) struTwo = struOne
-  if(struOne > struTwo) then
-    write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE"
-    iErr = .true.
-    return
-  end if
+  ! if(struTwo == -1) struTwo = struOne
+  ! if(struOne > struTwo) then
+  !   write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE, "//&
+  !     "got ",struOne," and ",struTwo
+  !   iErr = .true.
+  !   return
+  ! end if
 
-  dump_jobList(dump_nJobs)%fileID    = fileID
-  dump_jobList(dump_nJobs)%firstTurn = tOne
-  dump_jobList(dump_nJobs)%lastTurn  = tTwo
-  dump_jobList(dump_nJobs)%interval  = tStep
-  dump_jobList(dump_nJobs)%struOne   = struOne
-  dump_jobList(dump_nJobs)%struTwo   = struTwo
-  dump_jobList(dump_nJobs)%singID    = singID
+  dump_jobList(dump_nJobs)%fileID   = fileID
+  dump_jobList(dump_nJobs)%turnOne  = tOne
+  dump_jobList(dump_nJobs)%turnTwo  = tTwo
+  dump_jobList(dump_nJobs)%turnStep = tStep
+  dump_jobList(dump_nJobs)%elemOne  = elemOne
+  dump_jobList(dump_nJobs)%elemTwo  = elemTwo
+  dump_jobList(dump_nJobs)%posOne   = sOne
+  dump_jobList(dump_nJobs)%posTwo   = sTwo
+  dump_jobList(dump_nJobs)%struOne  = -1
+  dump_jobList(dump_nJobs)%struTwo  = -1
+  dump_jobList(dump_nJobs)%singID   = -1
+  dump_jobList(dump_nJobs)%isSingle = isSingElem
+  dump_jobList(dump_nJobs)%isRange  = isRange
 
 end subroutine dump_saveJobEntry
 

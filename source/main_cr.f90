@@ -22,9 +22,9 @@ program maincr
   use numerical_constants
 
   use dynk,    only : dynk_izuIndex
-  use fma,     only : fma_postpr, fma_flag
-  use dump,    only : dump_initialise, dumpclo,dumptas,dumptasinv
-  use zipf,    only : zipf_numfiles, zipf_dozip
+  use fma,     only : fma_postpr,fma_flag
+  use dump,    only : dump_initialise,dumpclo,dumptas,dumptasinv,dump_setupJobs
+  use zipf,    only : zipf_numfiles,zipf_dozip
   use scatter, only : scatter_init
 
   use mod_meta
@@ -370,6 +370,9 @@ program maincr
   ! possible to re-shuffle lattice structure
   call geom_reshuffleLattice
   call geom_calcDcum
+
+  ! Now that the lattice stuff is done, we can generate the dump jobs
+  call dump_setupJobs
 
   ! A.Mereghetti (CERN, BE-ABP-HSS), 16-12-2016
   ! initialise aperture of first and last elements of sequence
