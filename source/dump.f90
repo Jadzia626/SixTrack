@@ -22,7 +22,7 @@
 module dump
 
   use floatPrecision
-  use parpro, only : mFileName
+  use parpro, only : mFileName, mNameLen
 
   implicit none
 
@@ -45,28 +45,27 @@ module dump
   real(kind=fPrec), allocatable, public,  save :: dumpclo(:,:)      ! closed orbit used for normalisation of phase space
 
   type, private :: dump_fileType
-    character(len=mFileName), private :: file        = " "
-    integer,                  private :: format      = 0
-    real(kind=fPrec),         private :: tas(6,6)    = 0.0
-    real(kind=fPrec),         private :: invtas(6,6) = 0.0
-    logical,                  private :: highprec    = .false.
-    logical,                  private :: front       = .false.
+    character(len=mFileName), private :: file      = " "     ! File name
+    integer,                  private :: unit      = 0       ! File unit
+    integer,                  private :: format    = 0       ! Dump format
+    logical,                  private :: highprec  = .false. ! Use high precision for this file
+    logical,                  private :: front     = .false. ! Front dump
   end type dump_fileType
 
   type, private :: dump_jobType
-    integer,                  private :: fileID    = -1
-    integer,                  private :: turnOne   =  1
-    integer,                  private :: turnTwo   = -1
-    integer,                  private :: turnStep  =  1
-    character(len=mNameLen),  private :: elemOne   = " "
-    character(len=mNameLen),  private :: elemTwo   = " "
-    real(kind=fPrec),         private :: posOne    = 0.0
-    real(kind=fPrec),         private :: posTwo    = 0.0
-    integer,                  private :: struOne   = -1
-    integer,                  private :: struTwo   = -1
-    integer,                  private :: singID    = -1
-    logical,                  private :: isSingle  = .false.
-    logical,                  private :: isRange   = .false.
+    integer,                  private :: fileID    = -1      ! File ID to write to
+    integer,                  private :: turnOne   =  1      ! First turn to dump for
+    integer,                  private :: turnTwo   = -1      ! Last turn to dump for
+    integer,                  private :: turnStep  =  1      ! How many turns to skip before next dump
+    character(len=mNameLen),  private :: elemOne   = " "     ! First element name to dump for
+    character(len=mNameLen),  private :: elemTwo   = " "     ! Last element name to dump for
+    real(kind=fPrec),         private :: posOne    = 0.0     ! First s-coordinate to dump for
+    real(kind=fPrec),         private :: posTwo    = 0.0     ! Last s-coordinate to dump for
+    integer,                  private :: struOne   = -1      ! Structure index to start dump at
+    integer,                  private :: struTwo   = -1      ! Structure index to stop dump at
+    integer,                  private :: singID    = -1      ! Single element index to dump
+    logical,                  private :: isSingle  = .false. ! Whether we're dumping on single or structure index
+    logical,                  private :: isRange   = .false. ! Whether we're dumping a range or one element
   end type dump_jobType
 
   type(dump_fileType), allocatable, public, save :: dump_fileList(:)
@@ -432,52 +431,117 @@ subroutine dump_setupJobs
 
   use parpro
   use crcoall
+  use mod_units
   use mod_common
-  ! use string_tools
+  use mod_geometry
 
-  character(len=mFileName) fileName
-  integer i
+  character(len=mNameLen) elemOne, elemTwo
+  real(kind=fPrec) posOne, posTwo
+  integer fUnit, singID, struOne, struTwo, jobNo, sID
+  logical wasFound
 
-  write(lout,"(a)") str_divLine
-  write(lout,"(a)") ""
-  write(lout,"(a)") "    DUMP FILES"
-  write(lout,"(a)") "  =============="
-  write(lout,"(a)") ""
-  do i=1,dump_nFiles
-    fileName = dump_fileList(i)%file
-    fileName = trim(fileName)//" "//repeat(".",mFileName-len_trim(fileName)-1)
-    write(lout,"(a,i3,2(a,l1))") "    "//fileName//"  Format: ",dump_fileList(i)%format,", "//&
-      "HighPrec: ",dump_fileList(i)%highPrec,", Front: ",dump_fileList(i)%front
+  do jobNo=1,dump_nJobs
+
+    singID  = -1
+    struOne = -1
+    struTwo = -1
+
+    elemOne = dump_jobList(jobNo)%elemOne
+    elemTwo = dump_jobList(jobNo)%elemTwo
+    posOne  = dump_jobList(jobNo)%posOne
+    posTwo  = dump_jobList(jobNo)%posTwo
+
+    if(dump_jobList(jobNo)%isSingle) then
+
+      ! We have a single element to look up
+      if(elemOne == "ALL") then
+        ! DUMP ALL is handle by the structure element logic
+        struOne = 1
+        struTwo = iu
+        dump_jobList(jobNo)%isSingle = .false.
+      else if(elemOne == "StartDUMP") then
+        ! StartDUMP is handle by the structure element logic
+        struOne = 0
+        dump_jobList(jobNo)%isSingle = .false.
+      else
+        singID = geom_getSingElemID(elemOne)
+        if(singID == -1) then
+          write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the single element list."
+          call prror
+        end if
+      end if
+
+    else
+
+      if(elemOne == "ALL") then
+        struOne = 1
+        struTwo = iu
+      else if(elemOne == "StartDUMP") then
+        struOne = 0
+      else
+        if(elemOne == " ") then
+          ! We should have an s-coordinate instead
+          struOne = geom_getStruElemFromPos(posOne, 1)
+          if(struOne == -1) then
+            write(lerr,"(a)") "DUMP> ERROR Element search failed"
+            call prror
+          end if
+        else
+          struOne = geom_getStruElemID(elemOne, 1, iu)
+          if(struOne == -1) then
+            write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the structure element list"
+            call prror
+          end if
+        end if
+
+        if(dump_jobList(jobNo)%isRange) then
+          ! If we're looking for a range, look up the second element too
+          if(elemTwo == " ") then
+            ! We should have an s-coordinate instead
+            struTwo = geom_getStruElemFromPos(posTwo, -1)
+            if(struTwo == -1) then
+              write(lerr,"(a)") "DUMP> ERROR Element search failed"
+              call prror
+            end if
+          else
+            struTwo = geom_getStruElemID(elemTwo, 1, iu)
+            if(struTwo == -1) then
+              write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemTwo)//"' not found in the structure element list"
+              call prror
+            end if
+          end if
+        end if
+      end if
+
+    end if
+
+  ! if(struTwo == -1) struTwo = struOne
+  ! if(struOne > struTwo) then
+  !   write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE, "//&
+  !     "got ",struOne," and ",struTwo
+  !   iErr = .true.
+  !   return
+  ! end if
+
+    dump_jobList(jobNo)%singID  = singID
+    dump_jobList(jobNo)%struOne = struOne
+    dump_jobList(jobNo)%struTwo = struTwo
+
   end do
-  write(lout,"(a)") ""
 
-  write(lout,"(a)") "    DUMP JOBS"
-  write(lout,"(a)") "  ============="
-  write(lout,"(a)") ""
-  do i=1,dump_nJobs
-    fileName = dump_fileList(dump_jobList(i)%fileID)%file
-    fileName = trim(fileName)//" "//repeat(".",mFileName-len_trim(fileName)-1)
-    write(lout,"(3(a,i0))") "    "//fileName//"  "//&
-      "Turns: ",dump_jobList(i)%firstTurn," to ",dump_jobList(i)%lastTurn,", Step ",dump_jobList(i)%interval
-    if(dump_jobList(i)%singID > 0) then
-      write(lout,"(a,i6,a)") "     * From Single Element    ",dump_jobList(i)%singID, ": "//trim(bez(dump_jobList(i)%singID))
-    end if
-    if(dump_jobList(i)%struOne > 0) then
-      write(lout,"(a,i6,a)") "     * From Structure Element ",dump_jobList(i)%struOne,": "//trim(bezs(dump_jobList(i)%struOne))
-    end if
-    if(dump_jobList(i)%struTwo > 0) then
-      write(lout,"(a,i6,a)") "     * To Structure Element   ",dump_jobList(i)%struTwo,": "//trim(bezs(dump_jobList(i)%struTwo))
-    end if
-  end do
 
-  write(lout,"(a)") ""
-  write(lout,"(a)") str_divLine
 
-  stop
+
+  call f_requestUnit("dump_jobs.log",fUnit)
+  call f_open(file="dump_jobs.log", unit=fUnit, formatted=.true., mode="w", status="replace")
+  call dump_jobReport(fUnit)
+  call f_freeUnit(fUnit)
 
 end subroutine dump_setupJobs
 
 subroutine dump_saveFileEntry(fileName, fileFmt, isHighPrec, isFront, iErr)
+
+  use mod_units
 
   character(len=*), intent(in)    :: fileName
   integer,          intent(in)    :: fileFmt
@@ -486,6 +550,7 @@ subroutine dump_saveFileEntry(fileName, fileFmt, isHighPrec, isFront, iErr)
   logical,          intent(inout) :: iErr
 
   type(dump_fileType), allocatable :: tmpFileList(:)
+  integer fileUnit
 
   ! Make room for the file entry
   if(allocated(dump_fileList) .eqv. .false.) then
@@ -498,13 +563,14 @@ subroutine dump_saveFileEntry(fileName, fileFmt, isHighPrec, isFront, iErr)
     call move_alloc(tmpFileList, dump_fileList)
   end if
 
+  call f_requestUnit(fileName, fileUnit)
+
   ! Save it
-  dump_fileList(dump_nFiles)%file        = fileName
-  dump_fileList(dump_nFiles)%format      = fileFmt
-  dump_fileList(dump_nFiles)%tas(6,6)    = 0.0
-  dump_fileList(dump_nFiles)%invtas(6,6) = 0.0
-  dump_fileList(dump_nFiles)%highprec    = isHighPrec
-  dump_fileList(dump_nFiles)%front       = isFront
+  dump_fileList(dump_nFiles)%file     = fileName
+  dump_fileList(dump_nFiles)%unit     = fileUnit
+  dump_fileList(dump_nFiles)%format   = fileFmt
+  dump_fileList(dump_nFiles)%highprec = isHighPrec
+  dump_fileList(dump_nFiles)%front    = isFront
 
 end subroutine dump_saveFileEntry
 
@@ -561,108 +627,28 @@ subroutine dump_saveJobEntry(fileName, elemOne, elemTwo, sOne, sTwo, isSingElem,
     return
   end if
 
-  ! ! Look up the element IDs
-  ! singID  = -1
-  ! struOne = -1
-  ! struTwo = -1
-
-  ! if(isSingElem) then
-
-  !   ! We have a single element to look up
-  !   if(elemOne == "ALL") then
-  !     ! DUMP ALL is handle by the structure element logic
-  !     struOne = 1
-  !     struTwo = mbloz
-  !   else if(elemOne == "StartDUMP") then
-  !     ! StartDUMP is handle by the structure element logic
-  !     struOne = 0
-  !   else
-  !     singID = geom_getSingElemID(elemOne)
-  !     if(singID == -1) then
-  !       write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the single element list."
-  !       iErr = .true.
-  !       return
-  !     end if
-  !   end if
-
-  ! else
-
-  !   if(elemOne == "ALL") then
-  !     struOne = 1
-  !     struTwo = mbloz
-  !   else if(elemOne == "StartDUMP") then
-  !     struOne = 0
-  !   else
-  !     if(elemOne == " ") then
-  !       ! We should have an s coordinate instead
-  !       call geom_findElemAtLoc(sOne, .true., struOne, j, wasFound)
-  !       if(wasFound .eqv. .false.) then
-  !         ! Error message written by the search routine
-  !         iErr = .true.
-  !         return
-  !       end if
-  !     else
-  !       struOne = geom_getStruElemID(elemOne, 1, mbloz)
-  !       if(struOne == -1) then
-  !         write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemOne)//"' not found in the structure element list."
-  !         iErr = .true.
-  !         return
-  !       end if
-  !     end if
-
-  !     if(isRange) then
-  !       ! If we're looking for a range, look up the second element too
-  !       if(elemTwo == " ") then
-  !         ! We should have an s coordinate instead
-  !         call geom_findElemAtLoc(sTwo, .true., struTwo, j, wasFound)
-  !         if(wasFound .eqv. .false.) then
-  !           ! Error message written by the search routine
-  !           iErr = .true.
-  !           return
-  !         end if
-  !       else
-  !         struTwo = geom_getStruElemID(elemTwo, 1, mbloz)
-  !         if(struTwo == -1) then
-  !           write(lerr,"(a)") "DUMP> ERROR Element '"//trim(elemTwo)//"' not found in the structure element list."
-  !           iErr = .true.
-  !           return
-  !         end if
-  !       end if
-  !     end if
-  !   end if
-
-  ! end if
-
-  ! ! Do some sanity checks
-  ! if(tTwo == -1) tTwo = numl
-  ! if(tOne < 1) then
-  !   write(lerr,"(a,i0)") "DUMP> ERROR First turn must be larger than 0, got ",tOne
-  !   iErr = .true.
-  !   return
-  ! end if
-  ! if(tOne > tTwo) then
-  !   write(lerr,"(a,i0)") "DUMP> ERROR First turn must be smaller than last turn, unless last turn is -1, got ",tOne
-  !   iErr = .true.
-  !   return
-  ! end if
-  ! if(tTwo > numl) then
-  !   write(lerr,"(a,i0)") "DUMP> ERROR Last turn must be smaller or equal to number of turns, or -1, got ",tTwo
-  !   iErr = .true.
-  !   return
-  ! end if
-  ! if(tStep < 1 .or. tStep > numl) then
-  !   write(lerr,"(2(a,i0))") "DUMP> ERROR Turn interval must be in the range [1:",numl,"], got ",tStep
-  !   iErr = .true.
-  !   return
-  ! end if
-
-  ! if(struTwo == -1) struTwo = struOne
-  ! if(struOne > struTwo) then
-  !   write(lerr,"(2(a,i0))") "DUMP> ERROR Structure element one must be before structure element two in dump RANGE, "//&
-  !     "got ",struOne," and ",struTwo
-  !   iErr = .true.
-  !   return
-  ! end if
+  ! Do some sanity checks on the selected turns
+  if(tTwo == -1) tTwo = numl
+  if(tOne < 1) then
+    write(lerr,"(a,i0)") "DUMP> ERROR First turn must be larger than 0, got ",tOne
+    iErr = .true.
+    return
+  end if
+  if(tOne > tTwo) then
+    write(lerr,"(a,i0)") "DUMP> ERROR First turn must be smaller than last turn, unless last turn is -1, got ",tOne
+    iErr = .true.
+    return
+  end if
+  if(tTwo > numl) then
+    write(lerr,"(a,i0)") "DUMP> ERROR Last turn must be smaller or equal to number of turns, or -1, got ",tTwo
+    iErr = .true.
+    return
+  end if
+  if(tStep < 1 .or. tStep > numl) then
+    write(lerr,"(2(a,i0))") "DUMP> ERROR Turn interval must be in the range [1:",numl,"], got ",tStep
+    iErr = .true.
+    return
+  end if
 
   dump_jobList(dump_nJobs)%fileID   = fileID
   dump_jobList(dump_nJobs)%turnOne  = tOne
@@ -679,6 +665,58 @@ subroutine dump_saveJobEntry(fileName, elemOne, elemTwo, sOne, sTwo, isSingElem,
   dump_jobList(dump_nJobs)%isRange  = isRange
 
 end subroutine dump_saveJobEntry
+
+! ================================================================================================ !
+!  Write a report of the dump jobs
+!  V.K. Berglyd Olsen, BE-ABP-HSS
+!  Created: 2019-06-05
+!  Updated: 2019-06-05
+! ================================================================================================ !
+subroutine dump_jobReport(unit)
+
+  use mod_common
+
+  integer, intent(in) :: unit
+
+  character(len=mFileName) fileName
+  integer i
+
+  write(unit,"(a)") ""
+  write(unit,"(a)") "    Dump Files"
+  write(unit,"(a)") "  =============="
+  do i=1,dump_nFiles
+    fileName = dump_fileList(i)%file
+    fileName = trim(fileName)//" "//repeat(".",mFileName-len_trim(fileName)-1)
+    write(unit,"(4x,a,i3,2(a,l1))") fileName//"  Format: ",dump_fileList(i)%format,", "//&
+      "HighPrec: ",dump_fileList(i)%highPrec,", Front: ",dump_fileList(i)%front
+  end do
+  write(unit,"(a)") ""
+  write(unit,"(a)") "    Dump Jobs"
+  write(unit,"(a)") "  ============="
+  do i=1,dump_nJobs
+    fileName = dump_fileList(dump_jobList(i)%fileID)%file
+    fileName = trim(fileName)//" "//repeat(".",mFileName-len_trim(fileName)-1)
+    write(unit,"(4x,3(a,i0))") fileName//"  "//&
+      "Turns: ",dump_jobList(i)%turnOne," to ",dump_jobList(i)%turnTwo,", Step ",dump_jobList(i)%turnStep
+    if(dump_jobList(i)%singID > 0) then
+      write(unit,"(4x,a,i6,a)") " = Single Element    ",dump_jobList(i)%singID, ": "//trim(bez(dump_jobList(i)%singID))
+    end if
+    if(dump_jobList(i)%struOne > 0) then
+      write(unit,"(4x,a,i6,a,f13.6,a)") " < Structure Element ",dump_jobList(i)%struOne,": "//&
+        bezs(dump_jobList(i)%struOne)(1:36)//" S-Pos: ",dcum(dump_jobList(i)%struOne)," m"
+    end if
+    if(dump_jobList(i)%struTwo > 0) then
+      write(unit,"(4x,a,i6,a,f13.6,a)") " > Structure Element ",dump_jobList(i)%struTwo,": "//&
+        bezs(dump_jobList(i)%struTwo)(1:36)//" S-Pos: ",dcum(dump_jobList(i)%struTwo)," m"
+    end if
+  end do
+  write(unit,"(a)") ""
+
+end subroutine dump_jobReport
+
+! ================================================================================================ !
+!  DUMP ROUTINES
+! ================================================================================================ !
 
 subroutine dump_lines(n,i,ix)
 

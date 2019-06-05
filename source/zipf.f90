@@ -118,7 +118,6 @@ subroutine zipf_dozip
   call alloc(boincNames, 256, zipf_numFiles, " ", "boincNames")
 #endif
 
-  write(lout,"(a)") ""
   write(lout,"(a)") str_divLine
   write(lout,"(a)") ""
 
@@ -154,6 +153,7 @@ subroutine zipf_dozip
 #endif
 
   write(lout,"(a)") "ZIPF> Done!"
+  write(lout,"(a)") ""
 
 end subroutine zipf_dozip
 

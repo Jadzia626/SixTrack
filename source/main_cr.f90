@@ -23,7 +23,7 @@ program maincr
 
   use dynk,    only : dynk_izuIndex
   use fma,     only : fma_postpr,fma_flag
-  use dump,    only : dump_initialise,dumpclo,dumptas,dumptasinv,dump_setupJobs
+  use dump,    only : dump_initialise,dumpclo,dumptas,dumptasinv,dump_setupJobs,dump_jobReport
   use zipf,    only : zipf_numfiles,zipf_dozip
   use scatter, only : scatter_init
 
@@ -1524,6 +1524,9 @@ program maincr
   ! Make sure all files are flushed before we do stuff with them
   call f_flush
 
+  write(lout,"(a)") str_divLine
+  call dump_jobReport(lout)
+
 #ifdef HASHLIB
   ! HASH library. Must be before ZIPF
   call hash_fileSums
@@ -1542,7 +1545,6 @@ program maincr
 
   ! Get grand total including post-processing
   tottime = (pretime+trtime)+posttime
-  write(lout,"(a)")         ""
   write(lout,"(a)")         str_divLine
   write(lout,"(a)")         ""
   write(lout,"(a)")         "    Computing Time Summary"

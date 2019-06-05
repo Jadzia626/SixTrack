@@ -220,7 +220,6 @@ subroutine hash_fileSums
     return
   end if
 
-  write(lout,"(a)") ""
   write(lout,"(a)") str_divLine
   write(lout,"(a)") ""
   write(lout,"(a)") "    Computing MD5 Hash of Files"
@@ -240,6 +239,7 @@ subroutine hash_fileSums
 #ifdef WIN32
   call f_close(hash_sumFileUnit_win32)
 #endif
+  write(lout,"(a)") ""
 
 end subroutine hash_fileSums
 
